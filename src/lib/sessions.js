@@ -31,18 +31,49 @@ function phoneFromJid(jid) {
   return '+' + jid.replace('@s.whatsapp.net', '');
 }
 
-async function upsertConversation(operatorId, contactPhone, isNew) {
+async function upsertConversation(operatorId, contactPhone, companyId) {
   try {
-    // Find contact by phone
-    const { data: contact } = await supabase
+    // Find operator's company if not provided
+    let cid = companyId;
+    if (!cid) {
+      const { data: op } = await supabase
+        .from('users')
+        .select('company_id')
+        .eq('id', Number(operatorId))
+        .single();
+      cid = op?.company_id ?? null;
+    }
+
+    // Find or create contact by phone
+    let contact = null;
+    const { data: existingContact } = await supabase
       .from('contacts')
       .select('id, company_id')
       .eq('phone', contactPhone)
       .single();
 
+    if (existingContact) {
+      contact = existingContact;
+    } else {
+      // Auto-create contact
+      const { data: newContact } = await supabase
+        .from('contacts')
+        .insert({
+          phone: contactPhone,
+          first_name: contactPhone,
+          last_name: '',
+          operator_id: Number(operatorId),
+          status: 'new',
+          source: 'whatsapp',
+        })
+        .select('id, company_id')
+        .single();
+      contact = newContact;
+    }
+
     if (!contact) return null;
 
-    // Check if conversation exists
+    // Upsert conversation
     const { data: existing } = await supabase
       .from('conversations')
       .select('id')
@@ -51,27 +82,25 @@ async function upsertConversation(operatorId, contactPhone, isNew) {
       .single();
 
     if (existing) {
-      // Update last_message_at
       await supabase
         .from('conversations')
         .update({ last_message_at: new Date().toISOString() })
         .eq('id', existing.id);
-      return { conversationId: existing.id, contactId: contact.id, companyId: contact.company_id };
+      return { conversationId: existing.id, contactId: contact.id, companyId: cid };
     } else {
-      // Create new conversation
       const { data: created } = await supabase
         .from('conversations')
         .insert({
           contact_id: contact.id,
           operator_id: Number(operatorId),
-          company_id: contact.company_id,
+          company_id: cid,
           status: 'active',
           started_at: new Date().toISOString(),
           last_message_at: new Date().toISOString(),
         })
         .select('id')
         .single();
-      return { conversationId: created?.id, contactId: contact.id, companyId: contact.company_id };
+      return { conversationId: created?.id, contactId: contact.id, companyId: cid };
     }
   } catch (err) {
     console.error('upsertConversation error:', err.message);
@@ -109,7 +138,7 @@ async function handleMessage(operatorId, msg, direction) {
     const timestamp = new Date().toISOString();
 
     // Upsert conversation metadata
-    await upsertConversation(operatorId, contactPhone, direction === 'inbound');
+    await upsertConversation(operatorId, contactPhone, null);
 
     // Broadcast to Realtime
     await broadcastMessage(operatorId, contactPhone, {
