@@ -89,7 +89,7 @@ async function upsertConversation(operatorId, contactPhone, companyId) {
         .eq('id', existing.id);
       return { conversationId: existing.id, contactId: contact.id, companyId: cid };
     } else {
-      const { data: created } = await supabase
+      const { data: created, error: insertErr } = await supabase
         .from('conversations')
         .insert({
           contact_id: contact.id,
@@ -101,6 +101,7 @@ async function upsertConversation(operatorId, contactPhone, companyId) {
         })
         .select('id')
         .single();
+      if (insertErr) console.error('upsertConversation insert error:', insertErr.message, '| operatorId:', operatorId, '| cid:', cid, '| contactId:', contact.id);
       return { conversationId: created?.id, contactId: contact.id, companyId: cid };
     }
   } catch (err) {
