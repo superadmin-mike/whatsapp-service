@@ -259,7 +259,7 @@ function getSession(operatorId) {
   return sessions.get(operatorId) ?? null;
 }
 
-function deleteSession(operatorId) {
+async function deleteSession(operatorId) {
   const session = sessions.get(operatorId);
   if (session?.socket) {
     try { session.socket.logout(); } catch {}
