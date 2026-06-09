@@ -141,9 +141,13 @@ async function broadcastMessage(operatorId, contactPhone, payload) {
 async function handleMessage(operatorId, msg, direction) {
   try {
     const jid = msg.key.remoteJid ?? '';
-    if (!jid.endsWith('@s.whatsapp.net')) return;
+    const isIndividual = jid.endsWith('@s.whatsapp.net') || jid.endsWith('@lid');
+    if (!isIndividual) return;
 
-    const contactPhone = phoneFromJid(jid);
+    // For @lid JIDs (WhatsApp Business), use the numeric part as phone identifier
+    const contactPhone = jid.endsWith('@lid')
+      ? '+' + jid.replace('@lid', '')
+      : phoneFromJid(jid);
     const content =
       msg.message?.conversation ||
       msg.message?.extendedTextMessage?.text ||
