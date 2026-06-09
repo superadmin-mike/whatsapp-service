@@ -55,9 +55,10 @@ async function upsertConversation(operatorId, contactPhone, companyId) {
 
     if (existingContact) {
       contact = existingContact;
+      console.log(`[upsert] contacto existente id=${contact.id}`);
     } else {
       // Auto-create contact
-      const { data: newContact } = await supabase
+      const { data: newContact, error: contactErr } = await supabase
         .from('contacts')
         .insert({
           phone: contactPhone,
@@ -69,10 +70,15 @@ async function upsertConversation(operatorId, contactPhone, companyId) {
         })
         .select('id, company_id')
         .single();
+      if (contactErr) console.error('[upsert] error creando contacto:', contactErr.message);
+      else console.log(`[upsert] contacto creado id=${newContact?.id}`);
       contact = newContact;
     }
 
-    if (!contact) return null;
+    if (!contact) {
+      console.error('[upsert] contact es null, abortando');
+      return null;
+    }
 
     // Upsert conversation
     const { data: existing } = await supabase
