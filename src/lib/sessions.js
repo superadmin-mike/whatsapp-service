@@ -64,7 +64,7 @@ async function upsertConversation(operatorId, contactPhone, companyId) {
           last_name: '',
           operator_id: Number(operatorId),
           status: 'new',
-          source: 'whatsapp',
+          source: 'whatsapp_direct',
         })
         .select('id, company_id')
         .single();
