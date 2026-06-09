@@ -111,14 +111,27 @@ async function upsertConversation(operatorId, contactPhone, companyId) {
 
 async function broadcastMessage(operatorId, contactPhone, payload) {
   try {
-    const channel = supabase.channel(`chat:${operatorId}:${contactPhone.replace(/\D/g, '')}`);
-    await channel.send({
-      type: 'broadcast',
-      event: 'message',
-      payload,
+    const topic = `chat:${operatorId}:${contactPhone.replace(/\D/g, '')}`;
+    const url = `${process.env.SUPABASE_URL}/realtime/v1/api/broadcast`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
+        'apikey': process.env.SUPABASE_SERVICE_KEY,
+      },
+      body: JSON.stringify({
+        messages: [{
+          topic: `realtime:${topic}`,
+          event: 'message',
+          payload,
+        }],
+      }),
     });
-    // Cleanup channel after send
-    supabase.removeChannel(channel);
+    if (!res.ok) {
+      const text = await res.text();
+      console.error('broadcastMessage HTTP error:', res.status, text);
+    }
   } catch (err) {
     console.error('broadcastMessage error:', err.message);
   }
