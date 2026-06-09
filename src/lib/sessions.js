@@ -49,7 +49,7 @@ async function upsertConversation(operatorId, contactPhone, companyId) {
     let contact = null;
     const { data: existingContact } = await supabase
       .from('contacts')
-      .select('id, company_id')
+      .select('id')
       .eq('phone', contactPhone)
       .single();
 
@@ -68,7 +68,7 @@ async function upsertConversation(operatorId, contactPhone, companyId) {
           status: 'new',
           source: 'whatsapp_direct',
         })
-        .select('id, company_id')
+        .select('id')
         .single();
       if (contactErr) console.error('[upsert] error creando contacto:', contactErr.message);
       else console.log(`[upsert] contacto creado id=${newContact?.id}`);
@@ -253,10 +253,10 @@ async function createSession(operatorId) {
   });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    console.log(`[messages.upsert] operador ${operatorId} tipo=${type} cantidad=${messages.length}`);
     if (type !== 'notify') return;
     for (const msg of messages) {
       const jid = msg.key.remoteJid ?? '';
+      if (jid === 'status@broadcast') continue;
       console.log(`[mensaje] jid=${jid} fromMe=${msg.key.fromMe}`);
       const direction = msg.key.fromMe ? 'outbound' : 'inbound';
       await handleMessage(operatorId, msg, direction);
