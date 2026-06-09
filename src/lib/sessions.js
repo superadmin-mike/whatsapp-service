@@ -243,8 +243,11 @@ async function createSession(operatorId) {
   });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    console.log(`[messages.upsert] operador ${operatorId} tipo=${type} cantidad=${messages.length}`);
     if (type !== 'notify') return;
     for (const msg of messages) {
+      const jid = msg.key.remoteJid ?? '';
+      console.log(`[mensaje] jid=${jid} fromMe=${msg.key.fromMe}`);
       const direction = msg.key.fromMe ? 'outbound' : 'inbound';
       await handleMessage(operatorId, msg, direction);
     }
