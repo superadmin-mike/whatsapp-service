@@ -11,6 +11,7 @@ const path = require('path');
 const fs = require('fs');
 const pino = require('pino');
 const { supabase } = require('./supabase');
+const { downloadSession, syncSession, deleteStorageSession } = require('./storage');
 
 const sessions = new Map();
 const logger = pino({ level: 'silent' });
@@ -162,6 +163,13 @@ async function createSession(operatorId) {
   sessions.set(operatorId, sessionData);
 
   const dir = getSessionDir(operatorId);
+
+  // Download session from Supabase Storage if not local
+  if (!fs.existsSync(dir) || fs.readdirSync(dir).length === 0) {
+    console.log(`Descargando sesion de Storage para operador ${operatorId}...`);
+    await downloadSession(operatorId, dir);
+  }
+
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
   const { state, saveCreds } = await useMultiFileAuthState(dir);
@@ -182,7 +190,10 @@ async function createSession(operatorId) {
 
   sessionData.socket = sock;
 
-  sock.ev.on('creds.update', saveCreds);
+  sock.ev.on('creds.update', async () => {
+    saveCreds();
+    await syncSession(operatorId, dir);
+  });
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
@@ -212,6 +223,7 @@ async function createSession(operatorId) {
         setTimeout(() => createSession(operatorId), 5000);
       } else {
         if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
+        await deleteStorageSession(operatorId);
       }
     }
   });
@@ -255,6 +267,7 @@ function deleteSession(operatorId) {
   sessions.delete(operatorId);
   const dir = getSessionDir(operatorId);
   if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
+  await deleteStorageSession(operatorId);
 }
 
 module.exports = { createSession, sendMessage, getSession, deleteSession };

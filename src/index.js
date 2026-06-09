@@ -9,15 +9,21 @@ const { createSession } = require('./lib/sessions');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Auto-restore existing sessions on startup
-const sessionsDir = path.join(__dirname, '../sessions');
-if (fs.existsSync(sessionsDir)) {
-  const operators = fs.readdirSync(sessionsDir);
-  operators.forEach(operatorId => {
-    console.log(`Restaurando sesion del operador ${operatorId}...`);
-    createSession(operatorId);
-  });
-}
+// Auto-restore sessions from Supabase Storage on startup
+const { supabase: sb } = require('./lib/supabase');
+(async () => {
+  try {
+    const { data: folders } = await sb.storage.from('whatsapp-sessions').list();
+    if (folders && folders.length > 0) {
+      for (const folder of folders) {
+        console.log(`Restaurando sesion del operador ${folder.name}...`);
+        createSession(folder.name);
+      }
+    }
+  } catch (err) {
+    console.error('Error restaurando sesiones:', err.message);
+  }
+})();
 
 app.use(cors({
   origin: process.env.FRONTEND_URL || '*',
