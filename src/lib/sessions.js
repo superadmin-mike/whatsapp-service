@@ -1,11 +1,19 @@
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const {
+  default: makeWASocket,
+  DisconnectReason,
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+} = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const QRCode = require('qrcode');
 const path = require('path');
+const fs = require('fs');
+const pino = require('pino');
 const { supabase } = require('./supabase');
 
-// Map of active sessions: operatorId -> { socket, qr, status }
 const sessions = new Map();
+const logger = pino({ level: 'silent' });
 
 function getSessionDir(operatorId) {
   return path.join(__dirname, '../../sessions', String(operatorId));
@@ -13,21 +21,21 @@ function getSessionDir(operatorId) {
 
 async function saveMessageToSupabase(operatorId, msg, direction) {
   try {
-    const phone = direction === 'inbound'
-      ? msg.key.remoteJid.replace('@s.whatsapp.net', '')
-      : msg.key.remoteJid.replace('@s.whatsapp.net', '');
+    const jid = msg.key.remoteJid ?? '';
+    if (!jid.endsWith('@s.whatsapp.net')) return; // ignore groups
 
-    const content = msg.message?.conversation
-      || msg.message?.extendedTextMessage?.text
-      || '';
+    const phone = '+' + jid.replace('@s.whatsapp.net', '');
+    const content =
+      msg.message?.conversation ||
+      msg.message?.extendedTextMessage?.text ||
+      '';
 
     if (!content) return;
 
-    // Find contact by phone in Supabase
     const { data: contact } = await supabase
       .from('contacts')
       .select('id, company_id')
-      .eq('phone', `+${phone}`)
+      .eq('phone', phone)
       .eq('operator_id', Number(operatorId))
       .single();
 
@@ -36,12 +44,11 @@ async function saveMessageToSupabase(operatorId, msg, direction) {
     await supabase.from('messages').insert({
       company_id: contact.company_id,
       contact_id: contact.id,
-      sender: direction === 'inbound' ? `+${phone}` : 'operator',
+      sender: direction === 'inbound' ? phone : 'operator',
       content,
       direction,
       message_type: 'text',
       status: 'delivered',
-      operator_id: Number(operatorId),
     });
   } catch (err) {
     console.error('Error saving message:', err.message);
@@ -50,21 +57,29 @@ async function saveMessageToSupabase(operatorId, msg, direction) {
 
 async function createSession(operatorId) {
   if (sessions.has(operatorId)) {
-    const existing = sessions.get(operatorId);
-    if (existing.status === 'connected') return existing;
-    // If pending QR, return existing to avoid duplicate
-    if (existing.status === 'qr') return existing;
+    return sessions.get(operatorId);
   }
 
   const sessionData = { socket: null, qr: null, qrBase64: null, status: 'connecting' };
   sessions.set(operatorId, sessionData);
 
-  const { state, saveCreds } = await useMultiFileAuthState(getSessionDir(operatorId));
+  const dir = getSessionDir(operatorId);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  const { state, saveCreds } = await useMultiFileAuthState(dir);
+  const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
-    auth: state,
-    printQRInTerminal: false,
-    logger: require('pino')({ level: 'silent' }),
+    version,
+    auth: {
+      creds: state.creds,
+      keys: makeCacheableSignalKeyStore(state.keys, logger),
+    },
+    logger,
+    browser: ['CRM Multichannel', 'Chrome', '120.0.0'],
+    printQRInTerminal: true,
+    generateHighQualityLinkPreview: false,
+    syncFullHistory: false,
   });
 
   sessionData.socket = sock;
@@ -73,35 +88,34 @@ async function createSession(operatorId) {
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
+      console.log(`QR generado para operador ${operatorId}`);
       sessionData.qr = qr;
       sessionData.qrBase64 = await QRCode.toDataURL(qr);
       sessionData.status = 'qr';
-      console.log(`QR generated for operator ${operatorId}`);
     }
 
     if (connection === 'open') {
+      console.log(`Operador ${operatorId} conectado`);
       sessionData.status = 'connected';
       sessionData.qr = null;
       sessionData.qrBase64 = null;
-      console.log(`Operator ${operatorId} connected`);
     }
 
     if (connection === 'close') {
-      const shouldReconnect = lastDisconnect?.error instanceof Boom
-        ? lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut
-        : true;
+      const code = lastDisconnect?.error instanceof Boom
+        ? lastDisconnect.error.output?.statusCode
+        : 0;
+      const loggedOut = code === DisconnectReason.loggedOut;
 
-      sessionData.status = 'disconnected';
-      console.log(`Operator ${operatorId} disconnected. Reconnect: ${shouldReconnect}`);
+      console.log(`Operador ${operatorId} desconectado. Codigo: ${code}. LoggedOut: ${loggedOut}`);
 
-      if (shouldReconnect) {
-        sessions.delete(operatorId);
-        setTimeout(() => createSession(operatorId), 3000);
+      sessions.delete(operatorId);
+
+      if (!loggedOut) {
+        console.log(`Reconectando operador ${operatorId} en 5s...`);
+        setTimeout(() => createSession(operatorId), 5000);
       } else {
-        // Logged out — delete session files
-        sessions.delete(operatorId);
-        const fs = require('fs');
-        const dir = getSessionDir(operatorId);
+        // Sesion cerrada — borrar archivos
         if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
       }
     }
@@ -110,7 +124,7 @@ async function createSession(operatorId) {
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     for (const msg of messages) {
-      if (msg.key.fromMe) continue; // outbound already saved on send
+      if (msg.key.fromMe) continue;
       await saveMessageToSupabase(operatorId, msg, 'inbound');
     }
   });
@@ -118,35 +132,27 @@ async function createSession(operatorId) {
   return sessionData;
 }
 
+function normalizePhone(phone) {
+  let digits = phone.replace(/\D/g, '');
+  // Mexico: 52 + 10 digits = 12 digits. WhatsApp uses 521XXXXXXXXXX (13 digits)
+  if (digits.startsWith('52') && digits.length === 12) {
+    digits = '521' + digits.slice(2);
+  }
+  return digits + '@s.whatsapp.net';
+}
+
 async function sendMessage(operatorId, phone, text) {
   const session = sessions.get(operatorId);
   if (!session || session.status !== 'connected') {
-    throw new Error('Session not connected');
+    throw new Error('Sesion no conectada');
   }
 
-  const jid = phone.replace(/\D/g, '') + '@s.whatsapp.net';
+  const jid = normalizePhone(phone);
   await session.socket.sendMessage(jid, { text });
-
-  // Save outbound to Supabase
-  const { data: contact } = await supabase
-    .from('contacts')
-    .select('id, company_id')
-    .eq('phone', phone)
-    .eq('operator_id', Number(operatorId))
-    .single();
-
-  if (contact) {
-    await supabase.from('messages').insert({
-      company_id: contact.company_id,
-      contact_id: contact.id,
-      sender: 'operator',
-      content: text,
-      direction: 'outbound',
-      message_type: 'text',
-      status: 'sent',
-      operator_id: Number(operatorId),
-    });
-  }
+  await saveMessageToSupabase(operatorId, {
+    key: { remoteJid: jid, fromMe: false },
+    message: { conversation: text },
+  }, 'outbound');
 }
 
 function getSession(operatorId) {
@@ -159,7 +165,6 @@ function deleteSession(operatorId) {
     try { session.socket.logout(); } catch {}
   }
   sessions.delete(operatorId);
-  const fs = require('fs');
   const dir = getSessionDir(operatorId);
   if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
 }

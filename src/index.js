@@ -1,10 +1,23 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 const { sessionRouter } = require('./routes/session');
+const { createSession } = require('./lib/sessions');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Auto-restore existing sessions on startup
+const sessionsDir = path.join(__dirname, '../sessions');
+if (fs.existsSync(sessionsDir)) {
+  const operators = fs.readdirSync(sessionsDir);
+  operators.forEach(operatorId => {
+    console.log(`Restaurando sesion del operador ${operatorId}...`);
+    createSession(operatorId);
+  });
+}
 
 app.use(cors({
   origin: process.env.FRONTEND_URL || '*',
