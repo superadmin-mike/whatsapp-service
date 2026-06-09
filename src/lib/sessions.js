@@ -19,39 +19,108 @@ function getSessionDir(operatorId) {
   return path.join(__dirname, '../../sessions', String(operatorId));
 }
 
-async function saveMessageToSupabase(operatorId, msg, direction) {
+function normalizePhone(phone) {
+  let digits = phone.replace(/\D/g, '');
+  if (digits.startsWith('52') && digits.length === 12) {
+    digits = '521' + digits.slice(2);
+  }
+  return digits + '@s.whatsapp.net';
+}
+
+function phoneFromJid(jid) {
+  return '+' + jid.replace('@s.whatsapp.net', '');
+}
+
+async function upsertConversation(operatorId, contactPhone, isNew) {
   try {
-    const jid = msg.key.remoteJid ?? '';
-    if (!jid.endsWith('@s.whatsapp.net')) return; // ignore groups
-
-    const phone = '+' + jid.replace('@s.whatsapp.net', '');
-    const content =
-      msg.message?.conversation ||
-      msg.message?.extendedTextMessage?.text ||
-      '';
-
-    if (!content) return;
-
+    // Find contact by phone
     const { data: contact } = await supabase
       .from('contacts')
       .select('id, company_id')
-      .eq('phone', phone)
+      .eq('phone', contactPhone)
+      .single();
+
+    if (!contact) return null;
+
+    // Check if conversation exists
+    const { data: existing } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('contact_id', contact.id)
       .eq('operator_id', Number(operatorId))
       .single();
 
-    if (!contact) return;
+    if (existing) {
+      // Update last_message_at
+      await supabase
+        .from('conversations')
+        .update({ last_message_at: new Date().toISOString() })
+        .eq('id', existing.id);
+      return { conversationId: existing.id, contactId: contact.id, companyId: contact.company_id };
+    } else {
+      // Create new conversation
+      const { data: created } = await supabase
+        .from('conversations')
+        .insert({
+          contact_id: contact.id,
+          operator_id: Number(operatorId),
+          company_id: contact.company_id,
+          status: 'active',
+          started_at: new Date().toISOString(),
+          last_message_at: new Date().toISOString(),
+        })
+        .select('id')
+        .single();
+      return { conversationId: created?.id, contactId: contact.id, companyId: contact.company_id };
+    }
+  } catch (err) {
+    console.error('upsertConversation error:', err.message);
+    return null;
+  }
+}
 
-    await supabase.from('messages').insert({
-      company_id: contact.company_id,
-      contact_id: contact.id,
-      sender: direction === 'inbound' ? phone : 'operator',
-      content,
+async function broadcastMessage(operatorId, contactPhone, payload) {
+  try {
+    const channel = supabase.channel(`chat:${operatorId}:${contactPhone.replace(/\D/g, '')}`);
+    await channel.send({
+      type: 'broadcast',
+      event: 'message',
+      payload,
+    });
+    // Cleanup channel after send
+    supabase.removeChannel(channel);
+  } catch (err) {
+    console.error('broadcastMessage error:', err.message);
+  }
+}
+
+async function handleMessage(operatorId, msg, direction) {
+  try {
+    const jid = msg.key.remoteJid ?? '';
+    if (!jid.endsWith('@s.whatsapp.net')) return;
+
+    const contactPhone = phoneFromJid(jid);
+    const content =
+      msg.message?.conversation ||
+      msg.message?.extendedTextMessage?.text ||
+      msg.message?.imageMessage?.caption ||
+      '';
+
+    const timestamp = new Date().toISOString();
+
+    // Upsert conversation metadata
+    await upsertConversation(operatorId, contactPhone, direction === 'inbound');
+
+    // Broadcast to Realtime
+    await broadcastMessage(operatorId, contactPhone, {
       direction,
-      message_type: 'text',
-      status: 'delivered',
+      content,
+      timestamp,
+      phone: contactPhone,
+      operator_id: Number(operatorId),
     });
   } catch (err) {
-    console.error('Error saving message:', err.message);
+    console.error('handleMessage error:', err.message);
   }
 }
 
@@ -77,7 +146,7 @@ async function createSession(operatorId) {
     },
     logger,
     browser: ['CRM Multichannel', 'Chrome', '120.0.0'],
-    printQRInTerminal: true,
+    printQRInTerminal: false,
     generateHighQualityLinkPreview: false,
     syncFullHistory: false,
   });
@@ -107,15 +176,12 @@ async function createSession(operatorId) {
         : 0;
       const loggedOut = code === DisconnectReason.loggedOut;
 
-      console.log(`Operador ${operatorId} desconectado. Codigo: ${code}. LoggedOut: ${loggedOut}`);
-
+      console.log(`Operador ${operatorId} desconectado. Codigo: ${code}`);
       sessions.delete(operatorId);
 
       if (!loggedOut) {
-        console.log(`Reconectando operador ${operatorId} en 5s...`);
         setTimeout(() => createSession(operatorId), 5000);
       } else {
-        // Sesion cerrada — borrar archivos
         if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
       }
     }
@@ -124,21 +190,12 @@ async function createSession(operatorId) {
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     for (const msg of messages) {
-      if (msg.key.fromMe) continue;
-      await saveMessageToSupabase(operatorId, msg, 'inbound');
+      const direction = msg.key.fromMe ? 'outbound' : 'inbound';
+      await handleMessage(operatorId, msg, direction);
     }
   });
 
   return sessionData;
-}
-
-function normalizePhone(phone) {
-  let digits = phone.replace(/\D/g, '');
-  // Mexico: 52 + 10 digits = 12 digits. WhatsApp uses 521XXXXXXXXXX (13 digits)
-  if (digits.startsWith('52') && digits.length === 12) {
-    digits = '521' + digits.slice(2);
-  }
-  return digits + '@s.whatsapp.net';
 }
 
 async function sendMessage(operatorId, phone, text) {
@@ -149,8 +206,10 @@ async function sendMessage(operatorId, phone, text) {
 
   const jid = normalizePhone(phone);
   await session.socket.sendMessage(jid, { text });
-  await saveMessageToSupabase(operatorId, {
-    key: { remoteJid: jid, fromMe: false },
+
+  // Broadcast outbound via Realtime
+  await handleMessage(operatorId, {
+    key: { remoteJid: jid, fromMe: true },
     message: { conversation: text },
   }, 'outbound');
 }
