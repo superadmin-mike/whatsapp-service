@@ -210,6 +210,9 @@ async function createSession(operatorId) {
     printQRInTerminal: false,
     generateHighQualityLinkPreview: false,
     syncFullHistory: false,
+    getMessage: async (key) => {
+      return { conversation: '' };
+    },
   });
 
   sessionData.socket = sock;
