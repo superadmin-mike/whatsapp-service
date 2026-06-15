@@ -45,8 +45,12 @@ async function syncSession(operatorId, localDir) {
     const files = fs.readdirSync(localDir);
     for (const file of files) {
       const filePath = path.join(localDir, file);
-      if (fs.statSync(filePath).isFile()) {
-        await uploadFile(operatorId, file, filePath);
+      try {
+        if (fs.statSync(filePath).isFile()) {
+          await uploadFile(operatorId, file, filePath);
+        }
+      } catch {
+        // File may have been deleted mid-sync (pre-keys rotate fast), skip
       }
     }
   } catch (err) {
