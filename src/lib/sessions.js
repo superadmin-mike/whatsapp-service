@@ -217,16 +217,31 @@ async function createSession(operatorId) {
 
   sessionData.socket = sock;
 
+  // Load persisted lid map from DB on session start
+  (async () => {
+    const { data: rows } = await supabase
+      .from('operator_lid_map')
+      .select('lid, jid')
+      .eq('operator_id', Number(operatorId));
+    if (rows) {
+      for (const r of rows) sessionData.lidMap.set(r.lid, r.jid);
+      console.log(`[lid] cargados ${rows.length} lids de BD para operador ${operatorId}`);
+    }
+  })();
+
   // Map @lid JIDs to real phone JIDs for WhatsApp Business
-  sock.ev.on('contacts.upsert', (contacts) => {
+  sock.ev.on('contacts.upsert', async (contacts) => {
+    const newEntries = [];
     for (const c of contacts) {
       if (c.lid && c.id) {
         sessionData.lidMap.set(c.lid, c.id);
         console.log(`[lid] ${c.lid} -> ${c.id}`);
+        newEntries.push({ operator_id: Number(operatorId), lid: c.lid, jid: c.id });
       }
     }
-    if (contacts.length > 0 && !contacts[0].lid) {
-      console.log(`[contacts.upsert] sample keys: ${Object.keys(contacts[0]).join(', ')}`);
+    // Persist new entries to DB
+    if (newEntries.length > 0) {
+      await supabase.from('operator_lid_map').upsert(newEntries, { onConflict: 'operator_id,lid' });
     }
   });
 
