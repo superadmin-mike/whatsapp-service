@@ -117,8 +117,21 @@ async function upsertConversation(operatorId, contactPhone, companyId) {
   }
 }
 
-async function saveMessage(conversationId, operatorId, contactPhone, direction, content, companyId) {
+async function saveMessage(conversationId, operatorId, contactPhone, direction, content, companyId, waMessageId) {
   try {
+    // Dedup by whatsapp_message_id to avoid replaying messages on reconnect
+    if (waMessageId) {
+      const { data: existing } = await supabase
+        .from('messages')
+        .select('id')
+        .eq('whatsapp_message_id', waMessageId)
+        .maybeSingle();
+      if (existing) {
+        console.log(`[msg skip] duplicado waId=${waMessageId}`);
+        return;
+      }
+    }
+
     const { error } = await supabase.from('messages').insert({
       conversation_id: conversationId,
       sender: contactPhone,
@@ -127,6 +140,7 @@ async function saveMessage(conversationId, operatorId, contactPhone, direction, 
       message_type: 'text',
       status: 'sent',
       company_id: companyId || null,
+      whatsapp_message_id: waMessageId || null,
     });
     if (error) { console.error('saveMessage error:', error.message); return; }
     // Update last message preview on conversation
@@ -165,13 +179,18 @@ async function handleMessage(operatorId, msg, direction) {
       msg.message?.videoMessage?.caption ||
       '';
 
-    // Skip empty messages (reactions, stickers, etc.)
-    if (!content.trim()) return;
+    // Skip empty messages (reactions, stickers, undecryptable)
+    if (!content.trim()) {
+      if (direction === 'inbound') console.log(`[msg skip] inbound sin contenido jid=${jid} — posible renegociacion Signal`);
+      return;
+    }
+
+    const waMessageId = msg.key?.id || null;
 
     // Upsert conversation and save message
     const conv = await upsertConversation(operatorId, contactPhone, null);
     if (conv?.conversationId) {
-      await saveMessage(conv.conversationId, operatorId, contactPhone, direction, content, conv.companyId);
+      await saveMessage(conv.conversationId, operatorId, contactPhone, direction, content, conv.companyId, waMessageId);
     }
   } catch (err) {
     console.error('handleMessage error:', err.message);
