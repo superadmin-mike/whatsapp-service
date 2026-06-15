@@ -65,6 +65,7 @@ async function upsertConversation(operatorId, contactPhone, companyId) {
           first_name: contactPhone,
           last_name: '',
           operator_id: Number(operatorId),
+          company_id: cid || null,
           status: 'new',
           source: 'whatsapp_direct',
         }, { onConflict: 'phone' })
