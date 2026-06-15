@@ -57,21 +57,21 @@ async function upsertConversation(operatorId, contactPhone, companyId) {
       contact = existingContact;
       console.log(`[upsert] contacto existente id=${contact.id}`);
     } else {
-      // Auto-create contact
+      // Auto-create contact with upsert to avoid race conditions
       const { data: newContact, error: contactErr } = await supabase
         .from('contacts')
-        .insert({
+        .upsert({
           phone: contactPhone,
           first_name: contactPhone,
           last_name: '',
           operator_id: Number(operatorId),
           status: 'new',
           source: 'whatsapp_direct',
-        })
+        }, { onConflict: 'phone' })
         .select('id')
         .single();
       if (contactErr) console.error('[upsert] error creando contacto:', contactErr.message);
-      else console.log(`[upsert] contacto creado id=${newContact?.id}`);
+      else console.log(`[upsert] contacto upserted id=${newContact?.id}`);
       contact = newContact;
     }
 
@@ -229,6 +229,9 @@ async function createSession(operatorId) {
         sessionData.lidMap.set(c.lid, c.id);
         console.log(`[lid] ${c.lid} -> ${c.id}`);
       }
+    }
+    if (contacts.length > 0 && !contacts[0].lid) {
+      console.log(`[contacts.upsert] sample keys: ${Object.keys(contacts[0]).join(', ')}`);
     }
   });
 
