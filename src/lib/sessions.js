@@ -116,17 +116,19 @@ async function upsertConversation(operatorId, contactPhone, companyId) {
   }
 }
 
-async function saveMessage(conversationId, operatorId, contactPhone, direction, content) {
+async function saveMessage(conversationId, operatorId, contactPhone, direction, content, companyId) {
   try {
     const { error } = await supabase.from('messages').insert({
       conversation_id: conversationId,
-      operator_id: Number(operatorId),
-      contact_phone: contactPhone,
+      sender: contactPhone,
       direction,
       content: content || '',
       message_type: 'text',
+      status: 'sent',
+      company_id: companyId || null,
     });
     if (error) console.error('saveMessage error:', error.message);
+    else console.log(`[msg saved] ${direction} conv=${conversationId}`);
   } catch (err) {
     console.error('saveMessage error:', err.message);
   }
@@ -156,7 +158,7 @@ async function handleMessage(operatorId, msg, direction) {
     // Upsert conversation and save message
     const conv = await upsertConversation(operatorId, contactPhone, null);
     if (conv?.conversationId) {
-      await saveMessage(conv.conversationId, operatorId, contactPhone, direction, content);
+      await saveMessage(conv.conversationId, operatorId, contactPhone, direction, content, conv.companyId);
     }
   } catch (err) {
     console.error('handleMessage error:', err.message);
