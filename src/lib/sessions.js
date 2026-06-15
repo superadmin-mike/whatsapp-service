@@ -150,10 +150,15 @@ async function handleMessage(operatorId, msg, direction) {
     const isIndividual = jid.endsWith('@s.whatsapp.net') || jid.endsWith('@lid');
     if (!isIndividual) return;
 
-    // For @lid JIDs (WhatsApp Business), use the numeric part as phone identifier
-    const contactPhone = jid.endsWith('@lid')
-      ? '+' + jid.replace('@lid', '')
-      : phoneFromJid(jid);
+    // Resolve @lid to real phone JID using contact map
+    let resolvedJid = jid;
+    if (jid.endsWith('@lid')) {
+      const session = sessions.get(operatorId);
+      resolvedJid = session?.lidMap.get(jid) || jid;
+    }
+    const contactPhone = resolvedJid.endsWith('@s.whatsapp.net')
+      ? phoneFromJid(resolvedJid)
+      : '+' + resolvedJid.replace('@lid', '');
     const content =
       msg.message?.conversation ||
       msg.message?.extendedTextMessage?.text ||
@@ -183,7 +188,7 @@ async function createSession(operatorId) {
     return sessions.get(operatorId);
   }
 
-  const sessionData = { socket: null, qr: null, qrBase64: null, status: 'connecting' };
+  const sessionData = { socket: null, qr: null, qrBase64: null, status: 'connecting', lidMap: new Map() };
   sessions.set(operatorId, sessionData);
 
   const dir = getSessionDir(operatorId);
@@ -216,6 +221,16 @@ async function createSession(operatorId) {
   });
 
   sessionData.socket = sock;
+
+  // Map @lid JIDs to real phone JIDs for WhatsApp Business
+  sock.ev.on('contacts.upsert', (contacts) => {
+    for (const c of contacts) {
+      if (c.lid && c.id) {
+        sessionData.lidMap.set(c.lid, c.id);
+        console.log(`[lid] ${c.lid} -> ${c.id}`);
+      }
+    }
+  });
 
   sock.ev.on('creds.update', async () => {
     saveCreds();
@@ -275,11 +290,26 @@ async function sendMessage(operatorId, phone, text) {
     throw new Error('Sesion no conectada');
   }
 
-  // If phone is a LID identifier (from WhatsApp Business), use @lid JID
+  // Resolve real phone to JID — check if it's a LID-based phone
   const digits = phone.replace(/\D/g, '');
-  const jid = digits.length > 13
-    ? `${digits}@lid`
-    : normalizePhone(phone);
+  let jid;
+  if (digits.length > 13) {
+    // LID-based: try to find in lidMap by value, or use @lid directly
+    const session = sessions.get(operatorId);
+    let foundLid = null;
+    if (session?.lidMap) {
+      for (const [lid, realJid] of session.lidMap.entries()) {
+        if (realJid.startsWith(digits) || realJid === `${digits}@s.whatsapp.net`) {
+          foundLid = null; // we have the real JID
+          jid = realJid;
+          break;
+        }
+      }
+    }
+    if (!jid) jid = `${digits}@lid`;
+  } else {
+    jid = normalizePhone(phone);
+  }
 
   await session.socket.sendMessage(jid, { text });
 
