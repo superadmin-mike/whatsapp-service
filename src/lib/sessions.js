@@ -116,31 +116,19 @@ async function upsertConversation(operatorId, contactPhone, companyId) {
   }
 }
 
-async function broadcastMessage(operatorId, contactPhone, payload) {
+async function saveMessage(conversationId, operatorId, contactPhone, direction, content) {
   try {
-    const topic = `chat:${operatorId}:${contactPhone.replace(/\D/g, '')}`;
-    const url = `${process.env.SUPABASE_URL}/realtime/v1/api/broadcast`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
-        'apikey': process.env.SUPABASE_SERVICE_KEY,
-      },
-      body: JSON.stringify({
-        messages: [{
-          topic: `realtime:${topic}`,
-          event: 'message',
-          payload,
-        }],
-      }),
+    const { error } = await supabase.from('messages').insert({
+      conversation_id: conversationId,
+      operator_id: Number(operatorId),
+      contact_phone: contactPhone,
+      direction,
+      content: content || '',
+      message_type: 'text',
     });
-    if (!res.ok) {
-      const text = await res.text();
-      console.error('broadcastMessage HTTP error:', res.status, text);
-    }
+    if (error) console.error('saveMessage error:', error.message);
   } catch (err) {
-    console.error('broadcastMessage error:', err.message);
+    console.error('saveMessage error:', err.message);
   }
 }
 
@@ -165,19 +153,11 @@ async function handleMessage(operatorId, msg, direction) {
       msg.message?.imageMessage?.caption ||
       '';
 
-    const timestamp = new Date().toISOString();
-
-    // Upsert conversation metadata
-    await upsertConversation(operatorId, contactPhone, null);
-
-    // Broadcast to Realtime
-    await broadcastMessage(operatorId, contactPhone, {
-      direction,
-      content,
-      timestamp,
-      phone: contactPhone,
-      operator_id: Number(operatorId),
-    });
+    // Upsert conversation and save message
+    const conv = await upsertConversation(operatorId, contactPhone, null);
+    if (conv?.conversationId) {
+      await saveMessage(conv.conversationId, operatorId, contactPhone, direction, content);
+    }
   } catch (err) {
     console.error('handleMessage error:', err.message);
   }
