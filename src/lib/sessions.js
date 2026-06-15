@@ -263,6 +263,12 @@ async function createSession(operatorId) {
       console.log(`[mensaje] jid=${jid} fromMe=${msg.key.fromMe}`);
       const direction = msg.key.fromMe ? 'outbound' : 'inbound';
       await handleMessage(operatorId, msg, direction);
+      // Send read receipt for inbound messages
+      if (!msg.key.fromMe) {
+        try {
+          await sock.readMessages([msg.key]);
+        } catch {}
+      }
     }
   });
 
