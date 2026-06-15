@@ -153,7 +153,11 @@ async function handleMessage(operatorId, msg, direction) {
       msg.message?.conversation ||
       msg.message?.extendedTextMessage?.text ||
       msg.message?.imageMessage?.caption ||
+      msg.message?.videoMessage?.caption ||
       '';
+
+    // Skip empty messages (reactions, stickers, etc.)
+    if (!content.trim()) return;
 
     // Upsert conversation and save message
     const conv = await upsertConversation(operatorId, contactPhone, null);
