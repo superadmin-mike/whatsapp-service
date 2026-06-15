@@ -332,11 +332,11 @@ async function sendMessage(operatorId, phone, text) {
 
   await session.socket.sendMessage(jid, { text });
 
-  // Broadcast outbound via Realtime
-  await handleMessage(operatorId, {
+  // Save outbound message to DB (non-blocking — don't delay the send response)
+  handleMessage(operatorId, {
     key: { remoteJid: jid, fromMe: true },
     message: { conversation: text },
-  }, 'outbound');
+  }, 'outbound').catch(err => console.error('handleMessage outbound error:', err.message));
 }
 
 function getSession(operatorId) {
