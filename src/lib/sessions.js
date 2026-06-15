@@ -275,7 +275,12 @@ async function sendMessage(operatorId, phone, text) {
     throw new Error('Sesion no conectada');
   }
 
-  const jid = normalizePhone(phone);
+  // If phone is a LID identifier (from WhatsApp Business), use @lid JID
+  const digits = phone.replace(/\D/g, '');
+  const jid = digits.length > 13
+    ? `${digits}@lid`
+    : normalizePhone(phone);
+
   await session.socket.sendMessage(jid, { text });
 
   // Broadcast outbound via Realtime
