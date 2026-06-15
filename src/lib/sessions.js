@@ -127,8 +127,14 @@ async function saveMessage(conversationId, operatorId, contactPhone, direction, 
       status: 'sent',
       company_id: companyId || null,
     });
-    if (error) console.error('saveMessage error:', error.message);
-    else console.log(`[msg saved] ${direction} conv=${conversationId}`);
+    if (error) { console.error('saveMessage error:', error.message); return; }
+    // Update last message preview on conversation
+    await supabase.from('conversations').update({
+      last_message_at: new Date().toISOString(),
+      last_message: content,
+      last_message_direction: direction,
+    }).eq('id', conversationId);
+    console.log(`[msg saved] ${direction} conv=${conversationId}`);
   } catch (err) {
     console.error('saveMessage error:', err.message);
   }
@@ -144,11 +150,13 @@ async function handleMessage(operatorId, msg, direction) {
     let resolvedJid = jid;
     if (jid.endsWith('@lid')) {
       const session = sessions.get(operatorId);
-      resolvedJid = session?.lidMap.get(jid) || jid;
+      resolvedJid = session?.lidMap.get(jid) || null;
+      if (!resolvedJid) {
+        console.log(`[lid] no resuelto: ${jid}, ignorando mensaje`);
+        return;
+      }
     }
-    const contactPhone = resolvedJid.endsWith('@s.whatsapp.net')
-      ? phoneFromJid(resolvedJid)
-      : '+' + resolvedJid.replace('@lid', '');
+    const contactPhone = phoneFromJid(resolvedJid);
     const content =
       msg.message?.conversation ||
       msg.message?.extendedTextMessage?.text ||
