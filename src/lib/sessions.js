@@ -181,7 +181,16 @@ async function handleMessage(operatorId, msg, direction) {
 
     // Skip empty messages (reactions, stickers, undecryptable)
     if (!content.trim()) {
-      if (direction === 'inbound') console.log(`[msg skip] inbound sin contenido jid=${jid} — posible renegociacion Signal`);
+      if (direction === 'inbound') {
+        console.log(`[msg skip] inbound sin contenido jid=${jid} — solicitando retry`);
+        // Ask WhatsApp to resend the message
+        try {
+          const session = sessions.get(operatorId);
+          if (session?.socket && msg.key) {
+            await session.socket.sendReceipt(jid, null, [msg.key.id], 'read');
+          }
+        } catch {}
+      }
       return;
     }
 
@@ -229,7 +238,10 @@ async function createSession(operatorId) {
     printQRInTerminal: false,
     generateHighQualityLinkPreview: false,
     syncFullHistory: false,
+    retryRequestDelayMs: 500,
+    maxMsgRetryCount: 5,
     getMessage: async (key) => {
+      // Return empty so Baileys can re-request undecryptable messages
       return { conversation: '' };
     },
   });
