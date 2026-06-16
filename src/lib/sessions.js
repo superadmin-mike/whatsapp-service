@@ -182,14 +182,17 @@ async function handleMessage(operatorId, msg, direction) {
     // Skip empty messages (reactions, stickers, undecryptable)
     if (!content.trim()) {
       if (direction === 'inbound') {
-        console.log(`[msg skip] inbound sin contenido jid=${jid} — solicitando retry`);
-        // Ask WhatsApp to resend the message
+        console.log(`[msg skip] inbound sin contenido jid=${resolvedJid} — reseteando sesion Signal`);
+        // Delete stale Signal session so next message triggers fresh key exchange
         try {
           const session = sessions.get(operatorId);
-          if (session?.socket && msg.key) {
-            await session.socket.sendReceipt(jid, null, [msg.key.id], 'read');
+          if (session?.socket?.authState?.keys) {
+            await session.socket.authState.keys.set({ 'session': { [resolvedJid]: null } });
+            console.log(`[signal] sesion reseteada para ${resolvedJid}`);
           }
-        } catch {}
+        } catch (e) {
+          console.log(`[signal] reset error: ${e.message}`);
+        }
       }
       return;
     }
