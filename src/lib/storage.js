@@ -4,6 +4,16 @@ const path = require('path');
 
 const BUCKET = 'whatsapp-sessions';
 
+// Only sync these files — Signal session/pre-key files cause Bad MAC on restore
+const SYNC_FILES = ['creds.json', 'app-state-sync-key-*.json', 'app-state-sync-version-*.json'];
+
+function shouldSync(fileName) {
+  if (fileName === 'creds.json') return true;
+  if (fileName.startsWith('app-state-sync-')) return true;
+  // Skip session-*, pre-key-*, sender-key-* — these cause Bad MAC when stale
+  return false;
+}
+
 // Upload a local file to Supabase Storage
 async function uploadFile(operatorId, fileName, filePath) {
   try {
@@ -15,7 +25,7 @@ async function uploadFile(operatorId, fileName, filePath) {
   }
 }
 
-// Download all files for an operator from Supabase Storage to local dir
+// Download session files for an operator from Supabase Storage to local dir
 async function downloadSession(operatorId, localDir) {
   try {
     const { data: files } = await supabase.storage.from(BUCKET).list(String(operatorId));
@@ -24,6 +34,7 @@ async function downloadSession(operatorId, localDir) {
     if (!fs.existsSync(localDir)) fs.mkdirSync(localDir, { recursive: true });
 
     for (const file of files) {
+      if (!shouldSync(file.name)) continue; // skip stale Signal files
       const storagePath = `${operatorId}/${file.name}`;
       const { data } = await supabase.storage.from(BUCKET).download(storagePath);
       if (data) {
@@ -38,19 +49,20 @@ async function downloadSession(operatorId, localDir) {
   }
 }
 
-// Sync local session dir to Supabase Storage
+// Sync local session dir to Supabase Storage (only essential files)
 async function syncSession(operatorId, localDir) {
   try {
     if (!fs.existsSync(localDir)) return;
     const files = fs.readdirSync(localDir);
     for (const file of files) {
+      if (!shouldSync(file)) continue; // skip stale Signal files
       const filePath = path.join(localDir, file);
       try {
         if (fs.statSync(filePath).isFile()) {
           await uploadFile(operatorId, file, filePath);
         }
       } catch {
-        // File may have been deleted mid-sync (pre-keys rotate fast), skip
+        // File may have been deleted mid-sync, skip
       }
     }
   } catch (err) {
