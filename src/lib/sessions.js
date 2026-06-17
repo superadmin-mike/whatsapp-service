@@ -260,6 +260,18 @@ async function createSession(operatorId) {
     if (rows) {
       for (const r of rows) sessionData.lidMap.set(r.lid, r.jid);
       console.log(`[lid] cargados ${rows.length} lids de BD para operador ${operatorId}`);
+
+      // Pre-reset Signal sessions for all known JIDs to avoid Bad MAC on first message
+      if (rows.length > 0 && sock.authState?.keys) {
+        const resetMap = {};
+        for (const r of rows) resetMap[r.jid] = null;
+        try {
+          await sock.authState.keys.set({ 'session': resetMap });
+          console.log(`[signal] sesiones pre-reseteadas para ${rows.length} contactos`);
+        } catch (e) {
+          console.log(`[signal] pre-reset error: ${e.message}`);
+        }
+      }
     }
   })();
 
